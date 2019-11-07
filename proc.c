@@ -265,6 +265,21 @@ static const char * const fmtstk1[] = {
 #endif
 };
 
+static const char * const fmtstk0_lea[] = {
+	"lea %r, [%r - %d]",
+	"%r %d",
+#if STACKPROBE
+	"mov %r, %d",
+#endif
+};
+static const char * const fmtstk1_lea[] = {
+	"lea %r, [%r - %d - %s]",
+	"%r %d + %s",
+#if STACKPROBE
+	"mov %r, %d + %s",
+#endif
+};
+
 static const char * const fmtstk2[] = {
 	"lea %r, [%r + %d]",
 };
@@ -3097,7 +3112,13 @@ static void write_win64_default_prologue_RBP(struct proc_info *info)
 			* SUB  RSP, localsize
 			* .ALLOCSTACK localsize
 			*/
-			ppfmt = (resstack ? fmtstk1 : fmtstk0);
+			ppfmt = (resstack ?
+#if ALIGNRSPLEA
+				fmtstk1_lea : fmtstk0_lea
+#else
+				fmtstk1: fmtstk0
+#endif
+				);
 			#if STACKPROBE
 			if (info->localsize + stackadj + resstack > 0x1000) {
 				AddLineQueueX(*(ppfmt + 2), T_RAX, NUMQUAL info->localsize + stackadj, sym_ReservedStack->name);
@@ -3110,7 +3131,11 @@ static void write_win64_default_prologue_RBP(struct proc_info *info)
 			if (info->localsize + stackadj + resstack > 0)
 			{
 				subAmt = info->localsize + stackadj + sym_ReservedStack->value;
-				AddLineQueueX(*(ppfmt + 0), T_RSP, NUMQUAL info->localsize + stackadj, sym_ReservedStack->name);
+				AddLineQueueX(*(ppfmt + 0),
+#if ALIGNRSPLEA
+					T_RSP,
+#endif
+					T_RSP, NUMQUAL info->localsize + stackadj, sym_ReservedStack->name);
 				if (info->isframe && ModuleInfo.frame_auto)
 					AddLineQueueX(*(ppfmt + 1), T_DOT_ALLOCSTACK, NUMQUAL info->localsize + stackadj, sym_ReservedStack->name);
 			}
@@ -3118,7 +3143,13 @@ static void write_win64_default_prologue_RBP(struct proc_info *info)
 		else if (stackadj + info->localsize > 0 && ModuleInfo.frame_auto)
 		{
 			subAmt = info->localsize + stackadj;
-			AddLineQueueX("sub %r, %d", T_RSP, NUMQUAL stackadj + info->localsize);
+			AddLineQueueX(
+#if ALIGNRSPLEA
+				"lea %r, [%r - %d]", T_RSP,
+#else
+				"sub %r, %d",
+#endif
+				T_RSP, NUMQUAL stackadj + info->localsize);
 			if (info->isframe && ModuleInfo.frame_auto)
 				AddLineQueueX("%r %d", T_DOT_ALLOCSTACK, NUMQUAL stackadj + info->localsize);
 		}
@@ -3319,7 +3350,13 @@ static void write_win64_default_prologue_RSP(struct proc_info *info)
 			* .ALLOCSTACK localsize
 			*/
 
-			ppfmt = (resstack ? fmtstk1 : fmtstk0);
+			ppfmt = (resstack ?
+#if ALIGNRSPLEA
+				fmtstk1_lea : fmtstk0_lea
+#else
+				fmtstk1 : fmtstk0
+#endif
+				);
 #if STACKPROBE
 			if (info->localsize + resstack > 0x1000) {
 				AddLineQueueX(*(ppfmt + 2), T_RAX, NUMQUAL info->localsize, sym_ReservedStack->name);
@@ -3332,7 +3369,11 @@ static void write_win64_default_prologue_RSP(struct proc_info *info)
 				stackSize = info->localsize + info->vsize + info->xmmsize;
 			if ((stackSize & 7) != 0) stackSize = (stackSize + 7)&(-8);
 
-			AddLineQueueX(*(ppfmt + 0), T_RSP, NUMQUAL stackSize, sym_ReservedStack->name);
+			AddLineQueueX(*(ppfmt + 0),
+#if ALIGNRSPLEA
+				T_RSP,
+#endif
+				T_RSP, NUMQUAL stackSize, sym_ReservedStack->name);
 			AddLineQueueX(*(ppfmt + 1), T_DOT_ALLOCSTACK, NUMQUAL stackSize, sym_ReservedStack->name);
 
 			/* Handle ZEROLOCALS option */
@@ -3728,7 +3769,13 @@ static void write_win64_default_epilogue_RBP(struct proc_info *info)
 			}
 			else if (info->localsize + stackadj + resstack > 0)
 			{
-				AddLineQueueX("add %r, %d + %s", T_RSP, NUMQUAL stackadj + info->localsize, sym_ReservedStack->name);
+				AddLineQueueX(
+#if ALIGNRSPLEA
+					"lea %r, [%r + %d + %s]", T_RSP,
+#else
+					"add %r, %d + %s",
+#endif
+					T_RSP, NUMQUAL stackadj + info->localsize, sym_ReservedStack->name);
 			}
 		}
 		else if (stackadj + info->localsize > 0 && ModuleInfo.frame_auto)
@@ -3736,7 +3783,13 @@ static void write_win64_default_epilogue_RBP(struct proc_info *info)
 			if (!info->fpo)
 				AddLineQueueX("lea %r, [%r + %d]", T_RSP, info->basereg, NUMQUAL stackadj + info->localsize - info->frameofs);
 			else
-				AddLineQueueX("add %r, %d", T_RSP, NUMQUAL stackadj + info->localsize);
+				AddLineQueueX(
+#if ALIGNRSPLEA
+					"lea %r, [%r + %d]", T_RSP,
+#else
+					"add %r, %d",
+#endif
+					T_RSP, NUMQUAL stackadj + info->localsize);
 		}
 
 		pop_register(CurrProc->e.procinfo->regslist);
@@ -3820,13 +3873,25 @@ static void write_win64_default_epilogue_RSP(struct proc_info *info)
 		{
 			stackSize = info->localsize + info->vsize + info->xmmsize;
 			if ((stackSize & 7) != 0) stackSize = (stackSize + 7)&(-8);
-			AddLineQueueX("add %r, %d + %s", stackreg[ModuleInfo.Ofssize], NUMQUAL stackSize, sym_ReservedStack->name);
+			AddLineQueueX(
+#if ALIGNRSPLEA
+				"lea %r, [%r + %d + %s]", stackreg[ModuleInfo.Ofssize],
+#else
+				"add %r, %d + %s",
+#endif
+				stackreg[ModuleInfo.Ofssize], NUMQUAL stackSize, sym_ReservedStack->name);
 		}
 	}
 	else if (info->localsize > 0)
 	{
 		stackSize = info->localsize;
-		AddLineQueueX("add %r, %d", stackreg[ModuleInfo.Ofssize], stackSize);
+		AddLineQueueX(
+#if ALIGNRSPLEA
+			"lea %r, [%r + %d]", stackreg[ModuleInfo.Ofssize],
+#else
+			"add %r, %d",
+#endif
+			stackreg[ModuleInfo.Ofssize], stackSize);
 	}
 	pop_register(CurrProc->e.procinfo->regslist); //make sure we pop before correcting RSP.
 
@@ -4381,7 +4446,13 @@ static void write_sysv_default_prologue_RBP(struct proc_info *info)
 			;
 		else
 			// localsize includes the saved xmms, restack valid and a multiple of 16 or 0.
-			AddLineQueueX("sub %r, %d", T_RSP, NUMQUAL(info->localsize + stackadj + resstack));
+			AddLineQueueX(
+#if ALIGNRSPLEA
+				"lea %r, [%r - %d]", T_RSP,
+#else
+				"sub %r, %d",
+#endif
+			    T_RSP, NUMQUAL(info->localsize + stackadj + resstack));
 	}
 	/* No locals, still account for stackadj */
 	else if (stackadj > 0)
@@ -4486,7 +4557,13 @@ static void write_sysv_default_epilogue_RBP(struct proc_info *info)
 	if (ModuleInfo.redzone == 1 && (info->localsize + resstack < 128) && resstack == 0)
 		;
 	else if (info->localsize + stackadj > 0)
-		AddLineQueueX("add %r, %d", stackreg[ModuleInfo.Ofssize], NUMQUAL info->localsize + stackadj);
+		AddLineQueueX(
+#if ALIGNRSPLEA
+			"lea %r, [%r + %d]", stackreg[ModuleInfo.Ofssize],
+#else
+			"add %r, %d",
+#endif
+			stackreg[ModuleInfo.Ofssize], NUMQUAL info->localsize + stackadj);
 
 	pop_register(CurrProc->e.procinfo->regslist);
 
